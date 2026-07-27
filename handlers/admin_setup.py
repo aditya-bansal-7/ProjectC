@@ -25,6 +25,7 @@ The bot enters a "wizard state" per user stored in a simple in-memory dict
 from __future__ import annotations
 
 import logging
+import secrets
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -67,8 +68,15 @@ def _is_admin(user_id: int) -> bool:
     return db.is_admin(user_id)
 
 
-def _chrome_id_for(user_id: int | str) -> str:
-    return f"admin-{user_id}"
+def _get_or_create_chrome_id(admin: dict) -> str:
+    """Return the admin's existing chrome_id, or generate a fresh random one.
+
+    Using a random 8-char hex string keeps the profile ID short and opaque
+    — it doesn't expose the admin's Telegram user ID.
+    Reusing the stored ID means re-running "Create Chrome Profile" doesn't
+    orphan the old browser instance.
+    """
+    return admin.get("chrome_id") or secrets.token_hex(4)
 
 
 def _setup_keyboard() -> InlineKeyboardMarkup:
@@ -330,7 +338,7 @@ async def cb_setup_chrome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return IDLE
 
-    chrome_id = _chrome_id_for(user.id)
+    chrome_id = _get_or_create_chrome_id(admin)
 
     # Check if Project B is reachable
     if not project_b.ping():
