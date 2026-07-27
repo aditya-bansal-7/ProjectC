@@ -58,6 +58,53 @@ async def _get_verified_admin(update: Update) -> dict | None:
     return admin
 
 
+async def _try_start_session(update: Update, admin: dict, chat) -> bool:
+    """
+    Validates Chrome profile, browser status, and login state.
+    Starts the session in the DB if everything is OK.
+    Returns True if session was successfully started, False otherwise.
+    """
+    if admin.get("session_active"):
+        await update.message.reply_text(
+            "⚠️ A session is already active.\n"
+            "Use /stats to check progress or /close to end it."
+        )
+        return False
+
+    chrome_id = admin.get("chrome_id")
+    if not chrome_id:
+        await update.message.reply_text(
+            "❌ No Chrome profile found. Please run /setup in the bot DM first."
+        )
+        return False
+
+    # Verify browser is running and logged in
+    status = project_b.get_browser_status(chrome_id)
+    if not status.get("running"):
+        # Try to start it
+        try:
+            project_b.start_browser(chrome_id)
+        except Exception:
+            await update.message.reply_text(
+                "❌ Browser profile is not running and could not be started.\n"
+                "Go to bot DM → /setup → ✅ I've Logged In to X"
+            )
+            return False
+
+    # Use check-login for definitive login status (evaluates live page DOM)
+    if not project_b.is_logged_in(chrome_id):
+        await update.message.reply_text(
+            "❌ X account is not logged in.\n"
+            "Go to bot DM → /setup → ✅ I've Logged In to X"
+        )
+        return False
+
+    mode = admin.get("retweet_mode", "slow")
+    db.start_session(admin["user_id"], chat.id, chrome_id, mode)
+    return True
+
+
+
 # ---------------------------------------------------------------------------
 # /set — Post open GIF + quote
 # ---------------------------------------------------------------------------
@@ -67,11 +114,15 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin:
         return
 
+    if not await _try_start_session(update, admin, update.effective_chat):
+        return
+
     quote = get_random_quote()
     gif_path = get_random_gif()
 
+    speed = "🐢 Slow" if admin.get("retweet_mode", "slow") == "slow" else "⚡ Fast"
     caption = (
-        f"🟢 <b>Session is OPEN!</b>\n\n"
+        f"🟢 <b>Session is OPEN!</b> [{speed}]\n\n"
         f"💬 {quote}\n\n"
         f"👇 Drop your X links below!"
     )
@@ -119,44 +170,10 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat = update.effective_chat
 
-    if admin.get("session_active"):
-        await update.message.reply_text(
-            "⚠️ A session is already active.\n"
-            "Use /stats to check progress or /close to end it."
-        )
-        return
-
-    chrome_id = admin.get("chrome_id")
-    if not chrome_id:
-        await update.message.reply_text(
-            "❌ No Chrome profile found. Please run /setup in the bot DM first."
-        )
-        return
-
-    # Verify browser is running and logged in
-    status = project_b.get_browser_status(chrome_id)
-    if not status.get("running"):
-        # Try to start it
-        try:
-            project_b.start_browser(chrome_id)
-        except Exception:
-            await update.message.reply_text(
-                "❌ Browser profile is not running and could not be started.\n"
-                "Go to bot DM → /setup → ✅ I've Logged In to X"
-            )
-            return
-
-    # Use check-login for definitive login status (evaluates live page DOM)
-    if not project_b.is_logged_in(chrome_id):
-        await update.message.reply_text(
-            "❌ X account is not logged in.\n"
-            "Go to bot DM → /setup → ✅ I've Logged In to X"
-        )
+    if not await _try_start_session(update, admin, chat):
         return
 
     mode = admin.get("retweet_mode", "slow")
-    db.start_session(admin["user_id"], chat.id, chrome_id, mode)
-
     speed = "🐢 Slow (1 link / 60s)" if mode == "slow" else "⚡ Fast (3 links / 60s)"
     await update.message.reply_text(
         f"✅ <b>Session opened!</b>\n\n"
