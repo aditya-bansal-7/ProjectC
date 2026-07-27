@@ -344,7 +344,7 @@ async def cb_setup_chrome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         result = project_b.create_chrome_profile(chrome_id=chrome_id)
-        login_url = result.get("loginUrl") or result.get("url") or ""
+        login_url = result.get("url") or result.get("loginUrl") or ""
         db.set_admin_chrome(user.id, result.get("chromeId", chrome_id))
         db.set_x_logged_in(user.id, False)  # reset login status
 
@@ -448,7 +448,7 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             try:
                 start_result = project_b.start_browser(chrome_id)
-                login_url = start_result.get("loginUrl") or start_result.get("url") or ""
+                login_url = start_result.get("url") or start_result.get("loginUrl") or ""
                 buttons = [
                     [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
                 ]
