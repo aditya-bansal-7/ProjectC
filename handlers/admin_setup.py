@@ -434,7 +434,7 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.set_x_logged_in(user.id, False)
             # Build retry buttons with login URL if available
             restart_result = project_b.start_browser(chrome_id)
-            login_url = restart_result.get("loginUrl") or restart_result.get("url") or ""
+            login_url = restart_result.get("url") or restart_result.get("loginUrl") or ""
             buttons = [
                 [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
             ]
