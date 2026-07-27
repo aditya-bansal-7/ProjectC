@@ -82,7 +82,7 @@ def _get_or_create_chrome_id(admin: dict) -> str:
 def _setup_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📌 Set / Update My Group", callback_data="setup:group")],
-        [InlineKeyboardButton("🌐 Create Chrome Profile", callback_data="setup:chrome")],
+        [InlineKeyboardButton("🌐 Login X Acc", callback_data="setup:chrome")],
         [InlineKeyboardButton("✅ I've Logged In to X", callback_data="setup:verify_login")],
         [InlineKeyboardButton("📊 My Status", callback_data="setup:status")],
     ])
@@ -99,7 +99,6 @@ def _status_text(admin: dict) -> str:
         f"👤 User ID: <code>{admin['user_id']}</code>\n"
         f"🏷️ Username: @{admin.get('username') or 'unknown'}\n\n"
         f"📌 Group: {group}\n"
-        f"🌐 Chrome Profile: <code>{chrome}</code>\n"
         f"🐦 X Account: {x_status}\n"
         f"⚙️ Retweet Mode: {mode}\n"
         f"📡 Session: {session}\n"
