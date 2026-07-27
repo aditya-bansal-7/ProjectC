@@ -62,9 +62,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for url in urls:
-        db.add_link_to_queue(admin["user_id"], url)
+        db.add_link_to_queue(admin["user_id"], url, message.message_id)
         logger.info(
-            f"[LinkCollector] Queued: {url} | admin={admin['user_id']} | group={chat.id}"
+            f"[LinkCollector] Queued: {url} | msg={message.message_id} | admin={admin['user_id']} | group={chat.id}"
         )
 
 

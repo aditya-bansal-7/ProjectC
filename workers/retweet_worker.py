@@ -86,7 +86,7 @@ def _worker_loop(bot: Bot):
                             _last_retweet.pop(admin_id, None)
                             _last_login_check.pop(admin_id, None)
                             _send_group_message(
-                                bot, group_id,
+                                group_id,
                                 f"❌ <b>BOT STOPPED</b>\n\n"
                                 f"Reason: {reason}.\n\n"
                                 "Fix the login in the bot DM → /setup, then send /open again.",
@@ -101,9 +101,12 @@ def _worker_loop(bot: Bot):
                     continue  # not yet time for next retweet
 
                 # ---- Pop next link from queue ----
-                url = db.pop_link_from_queue(admin_id)
-                if not url:
+                item = db.pop_link_from_queue(admin_id)
+                if not item:
                     continue  # queue empty
+
+                url = item["url"]
+                message_id = item.get("message_id")
 
                 # ---- Retweet ----
                 try:
@@ -113,11 +116,15 @@ def _worker_loop(bot: Bot):
                     if queued:
                         db.mark_link_done(admin_id)
                         logger.info(f"[Worker] ✅ Retweeted: {url} (admin={admin_id})")
+                        if message_id:
+                            _react_to_message(group_id, message_id, "👍")
                     else:
                         reason = result.get("message") or result.get("error") or "Unexpected response from Project B"
                         db.mark_link_failed(admin_id, url, reason)
                         logger.warning(f"[Worker] ❌ Retweet failed: {url} — {reason}")
-                        _send_failure_message(bot, group_id, url, reason)
+                        _send_failure_message(group_id, url, reason)
+                        if message_id:
+                            _react_to_message(group_id, message_id, "❌")
 
                     _last_retweet[admin_id] = time.time()
 
@@ -125,7 +132,9 @@ def _worker_loop(bot: Bot):
                     reason = str(e) or "Tweet not opened / error"
                     db.mark_link_failed(admin_id, url, reason)
                     logger.error(f"[Worker] ❌ Exception retweeting {url}: {e}")
-                    _send_failure_message(bot, group_id, url, reason)
+                    _send_failure_message(group_id, url, reason)
+                    if message_id:
+                        _react_to_message(group_id, message_id, "❌")
                     _last_retweet[admin_id] = time.time()
 
         except Exception as e:
@@ -138,26 +147,45 @@ def _worker_loop(bot: Bot):
 # Telegram messaging helpers
 # ---------------------------------------------------------------------------
 
-def _send_group_message(bot: Bot, group_id: str, text: str):
+def _send_group_message(group_id: str, text: str):
+    """Safely sends a message from this synchronous background thread."""
+    import requests
+    from config import settings
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": group_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
     try:
-        bot.send_message(
-            chat_id=int(group_id),
-            text=text,
-            parse_mode="HTML",
-        )
-    except TelegramError as e:
-        logger.error(f"[Worker] Failed to send message to group {group_id}: {e}")
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        logger.error(f"[Worker] Unexpected error sending message: {e}")
+        logger.error(f"[Worker] Failed to send message to group {group_id}: {e}")
 
 
-def _send_failure_message(bot: Bot, group_id: str, url: str, reason: str):
+def _react_to_message(group_id: str, message_id: int, emoji: str):
+    """Sets a reaction (like 👍 or ❌) on a specific message."""
+    import requests
+    from config import settings
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/setMessageReaction"
+    payload = {
+        "chat_id": group_id,
+        "message_id": message_id,
+        "reaction": [{"type": "emoji", "emoji": emoji}]
+    }
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logger.warning(f"[Worker] Failed to react to message {message_id}: {e}")
+
+
+def _send_failure_message(group_id: str, url: str, reason: str):
     text = (
         "❌ <b>FAILED</b>\n\n"
         f"Link:\n<code>{url}</code>\n\n"
         f"Reason:\n{reason}"
     )
-    _send_group_message(bot, group_id, text)
+    _send_group_message(group_id, text)
 
 
 # ---------------------------------------------------------------------------

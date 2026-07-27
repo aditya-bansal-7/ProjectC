@@ -197,12 +197,13 @@ def get_active_session(admin_id: int | str) -> Optional[dict]:
     return _sessions().find_one({"admin_id": str(admin_id), "active": True})
 
 
-def add_link_to_queue(admin_id: int | str, url: str):
+def add_link_to_queue(admin_id: int | str, url: str, message_id: int = None):
     """Append a tweet URL to the session queue and increment received count."""
+    item = {"url": url, "message_id": message_id}
     _sessions().update_one(
         {"admin_id": str(admin_id), "active": True},
         {
-            "$push": {"queue": url},
+            "$push": {"queue": item},
             "$inc": {"links_received": 1},
         },
     )
@@ -227,7 +228,7 @@ def pop_link_from_queue(admin_id: int | str) -> Optional[str]:
     return None  # handled by _pop_link_safe below
 
 
-def _pop_link_safe(admin_id: int | str) -> Optional[str]:
+def _pop_link_safe(admin_id: int | str) -> Optional[dict]:
     """Safe atomic pop of first item from session queue."""
     # Step 1: fetch current first element
     session = _sessions().find_one(
@@ -237,14 +238,18 @@ def _pop_link_safe(admin_id: int | str) -> Optional[str]:
     if not session or not session.get("queue"):
         return None
 
-    url = session["queue"][0]
+    item = session["queue"][0]
+
+    # Handle old queue items that might just be string URLs
+    if isinstance(item, str):
+        item = {"url": item, "message_id": None}
 
     # Step 2: remove it
     _sessions().update_one(
         {"admin_id": str(admin_id), "active": True},
         {"$pop": {"queue": -1}},
     )
-    return url
+    return item
 
 
 # Override with safe version
