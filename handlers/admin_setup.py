@@ -412,6 +412,7 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         status = project_b.get_browser_status(chrome_id)
+        logger.info("[verify_login] raw status from Project B: %s", status)
         logged_in = bool(status.get("loggedIn", False))
         running = bool(status.get("running", False))
 
@@ -431,22 +432,22 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
             )
         elif running:
+            # Browser is running but not yet flagged as logged in.
+            # Do NOT restart — that would kill the existing session.
+            # Just ask the user to wait a moment and check again.
             db.set_x_logged_in(user.id, False)
-            # Build retry buttons with login URL if available
-            restart_result = project_b.start_browser(chrome_id)
-            login_url = restart_result.get("url") or restart_result.get("loginUrl") or ""
-            buttons = [
-                [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
-            ]
-            if login_url:
-                buttons.insert(0, [InlineKeyboardButton("🔗 Open Login Link", url=login_url)])
-
             await query.edit_message_text(
                 "❌ <b>Not logged in yet.</b>\n\n"
-                "The browser is running but X is not logged in.\n"
-                "Please complete the login in the browser, then tap <b>Check Again</b>.",
+                "The browser is running but X login hasn't been detected.\n"
+                "• Make sure you completed the login inside the browser window\n"
+                "• Wait a few seconds, then tap <b>Check Again</b>\n\n"
+                f"<i>Debug: loggedIn={status.get('loggedIn')!r}, "
+                f"running={status.get('running')!r}</i>",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(buttons),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
+                    [InlineKeyboardButton("↩️ Back to Setup", callback_data="setup:back")],
+                ]),
             )
         else:
             # Browser not running — try to start it
