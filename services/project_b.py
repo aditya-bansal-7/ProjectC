@@ -180,6 +180,20 @@ class ProjectBClient:
             logger.error(f"[ProjectB] bulk_retweet error: {e}")
             raise
 
+    def post_tweet(self, chrome_id: str, text: str, media_path: str = None) -> dict:
+        """
+        POST /tweet
+        Returns: {success: true}
+        """
+        payload = {"chromeId": chrome_id, "text": text}
+        if media_path:
+            payload["mediaPath"] = media_path
+        try:
+            return self._post("/tweet", payload, auth=True)
+        except Exception as e:
+            logger.error(f"[ProjectB] post_tweet error: {e}")
+            raise
+
     def check_login(self, chrome_id: str) -> dict:
         """
         GET /browser/:chromeId/check-login

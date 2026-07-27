@@ -128,6 +128,29 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
+        # 1. Send temporary "Posting..." message
+        status_msg = await update.message.reply_text("⏳ <i>Posting to X... please wait.</i>", parse_mode="HTML")
+
+        # 2. Post to X via Project B
+        absolute_gif_path = str(gif_path.absolute()) if gif_path else None
+        try:
+            project_b.post_tweet(admin["chrome_id"], text=quote, media_path=absolute_gif_path)
+            x_status = "✅ <b>Also posted to X!</b>"
+        except Exception as e:
+            logger.error(f"Failed to post tweet to X: {e}")
+            x_status = "⚠️ <b>Failed to post to X.</b>"
+
+        # 3. Post to Telegram group
+        caption = (
+            f"🟢 <b>Session is OPEN!</b> [{speed}]\n\n"
+            f"💬 {quote}\n\n"
+            f"👇 Drop your X links below!\n\n"
+            f"{x_status}"
+        )
+
+        # Delete the temporary message
+        await status_msg.delete()
+
         if gif_path:
             ext = gif_path.suffix.lower()
             with open(gif_path, "rb") as f:
@@ -146,15 +169,13 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             # No GIF file — send text only
             await update.message.reply_text(
-                "🟢 <b>Session is OPEN!</b>\n\n"
-                f"💬 {quote}\n\n"
-                "👇 Drop your X links below!",
+                caption,
                 parse_mode="HTML",
             )
     except Exception as e:
         logger.exception("/set failed")
         await update.message.reply_text(
-            f"⚠️ Could not send GIF: {e}\n\n"
+            f"⚠️ Error: {e}\n\n"
             f"🟢 Session is OPEN!\n{quote}",
         )
 
