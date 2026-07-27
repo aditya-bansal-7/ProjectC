@@ -91,7 +91,7 @@ def main():
         poll_interval=1.0,
         timeout=30,
         drop_pending_updates=True,
-        allowed_updates=["message", "callback_query", "chat_member"],
+        allowed_updates=["message", "callback_query", "chat_member", "chat_shared"],
     )
 
 

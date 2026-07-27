@@ -8,10 +8,15 @@ Flow:
   /removeadmin → super-admin only: remove an admin
 
 Setup steps (via inline buttons):
-  1. Set Group        → forward a message from group OR send group @username/ID
+  1. Set Group        → tap "Share Group" button (ChatShared) OR type numeric group ID
   2. Create Chrome    → calls POST /browser/create, sends login URL
   3. Mark X Logged In → calls GET /browser/status, verifies loggedIn flag
   4. My Status        → summary of current config
+
+Group identification uses Telegram's ChatShared feature (KeyboardButtonRequestChat).
+The bot sends a reply keyboard with a native share-chat button; when the user taps
+it Telegram delivers a chat_shared service message containing the group ID directly.
+Manual numeric ID entry (e.g. -1001234567890) is kept as a fallback.
 
 The bot enters a "wizard state" per user stored in a simple in-memory dict
 (good enough; restarts reset it which is acceptable).
@@ -20,7 +25,15 @@ The bot enters a "wizard state" per user stored in a simple in-memory dict
 from __future__ import annotations
 
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    KeyboardButtonRequestChat,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -147,6 +160,26 @@ async def cmd_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Callback: setup:group
 # ---------------------------------------------------------------------------
 
+# Request ID used for the KeyboardButtonRequestChat share button
+_SHARE_GROUP_REQUEST_ID = 1
+
+
+def _share_group_keyboard() -> ReplyKeyboardMarkup:
+    """One-time reply keyboard with a native Telegram chat-share button."""
+    btn = KeyboardButton(
+        text="📌 Share Group",
+        request_chat=KeyboardButtonRequestChat(
+            request_id=_SHARE_GROUP_REQUEST_ID,
+            chat_is_channel=False,  # groups / supergroups only
+        ),
+    )
+    return ReplyKeyboardMarkup(
+        [[btn]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 async def cb_setup_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -157,19 +190,27 @@ async def cb_setup_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return IDLE
 
     context.user_data["wizard"] = "waiting_for_group"
+
+    # First edit the inline-keyboard message (can't attach reply keyboards to edits)
     await query.edit_message_text(
         "📌 <b>Set Your Group</b>\n\n"
-        "Please send me the group's <b>numeric ID</b> (e.g. <code>-1001234567890</code>) "
-        "or <b>@username</b>.\n\n"
-        "💡 Tip: Forward any message from the group to this chat — I'll extract the ID.\n\n"
+        "Tap the <b>📌 Share Group</b> button that just appeared below to pick your group.\n\n"
+        "Alternatively, type the numeric group ID manually\n"
+        "(e.g. <code>-1001234567890</code>).\n\n"
         "Send /cancel to go back.",
         parse_mode="HTML",
+    )
+    # Send a separate message carrying the reply keyboard
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="👇 Use the button below or type the group ID:",
+        reply_markup=_share_group_keyboard(),
     )
     return WAITING_FOR_GROUP
 
 
 async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Called when admin sends group ID/username or forwards a group message."""
+    """Called when admin taps Share Group (chat_shared) or types a numeric group ID."""
     user = update.effective_user
     wizard = context.user_data.get("wizard")
 
@@ -179,37 +220,43 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     group_id = None
     group_title = None
 
-    # Case 1: Forwarded message from group
     msg = update.message
-    if msg.forward_from_chat and msg.forward_from_chat.type in ("group", "supergroup", "channel"):
-        group_id = msg.forward_from_chat.id
-        group_title = msg.forward_from_chat.title or ""
 
-    # Case 2: Text with @username or numeric ID
+    # Case 1: Telegram ChatShared service message (from the Share Group button)
+    if msg.chat_shared and msg.chat_shared.request_id == _SHARE_GROUP_REQUEST_ID:
+        group_id = msg.chat_shared.chat_id
+        # chat_shared may optionally carry title if request_title=True was set
+        group_title = getattr(msg.chat_shared, "title", None) or ""
+
+    # Case 2: Manual numeric ID typed by the user
     elif msg.text:
         text = msg.text.strip()
         if text.startswith("-") and text.lstrip("-").isdigit():
             group_id = int(text)
             group_title = ""
         elif text.startswith("@"):
-            # We can't resolve @username to ID without calling Telegram API
-            # Ask user to send numeric ID instead
             await msg.reply_text(
-                "⚠️ Please send the numeric group ID (e.g. <code>-1001234567890</code>).\n"
-                "To find it: add @userinfobot to your group and type /start there.",
+                "⚠️ Username lookup isn't supported. Please type the numeric group ID\n"
+                "(e.g. <code>-1001234567890</code>).\n"
+                "To find it: add @userinfobot to your group and send /start there.",
                 parse_mode="HTML",
             )
             return WAITING_FOR_GROUP
+        elif text == "/cancel":
+            # Let the ConversationHandler's cancel command handle it
+            return WAITING_FOR_GROUP
         else:
             await msg.reply_text(
-                "❌ Couldn't parse that. Please send the numeric group ID (e.g. <code>-1001234567890</code>).",
+                "❌ Couldn't parse that. Please tap <b>📌 Share Group</b> or type the "
+                "numeric group ID (e.g. <code>-1001234567890</code>).",
                 parse_mode="HTML",
             )
             return WAITING_FOR_GROUP
 
     if group_id is None:
         await msg.reply_text(
-            "❌ Couldn't detect a group from that message. Try forwarding a message from the group.",
+            "❌ Couldn't detect a group. Tap <b>📌 Share Group</b> or type the "
+            "numeric group ID (e.g. <code>-1001234567890</code>).",
             parse_mode="HTML",
         )
         return WAITING_FOR_GROUP
@@ -221,6 +268,7 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"❌ That group is already registered to another admin "
             f"(@{existing.get('username') or existing['user_id']}).\n"
             "Each admin can manage only one unique group.",
+            reply_markup=ReplyKeyboardRemove(),
         )
         context.user_data.pop("wizard", None)
         return IDLE
@@ -234,6 +282,13 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"🏷️ Title: {group_title or 'Unknown (you can update later)'}\n\n"
         "Now use /setup → 🌐 Create Chrome Profile to continue.",
         parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    # Send the inline setup panel as a follow-up
+    await context.bot.send_message(
+        chat_id=msg.chat_id,
+        text="⚙️ <b>Admin Setup Panel</b>\n\nChoose an action:",
+        parse_mode="HTML",
         reply_markup=_setup_keyboard(),
     )
     return IDLE
@@ -242,7 +297,13 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("wizard", None)
     await update.message.reply_text(
-        "↩️ Cancelled. Use /setup to go back to the panel.",
+        "↩️ Cancelled.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="⚙️ <b>Admin Setup Panel</b>\n\nChoose an action:",
+        parse_mode="HTML",
         reply_markup=_setup_keyboard(),
     )
     return IDLE
@@ -574,8 +635,14 @@ def register(application):
                 CallbackQueryHandler(cb_setup_back, pattern="^setup:back$"),
             ],
             WAITING_FOR_GROUP: [
+                # ChatShared service message (from the Share Group button)
                 MessageHandler(
-                    filters.TEXT | filters.FORWARDED,
+                    filters.StatusUpdate.CHAT_SHARED,
+                    handle_group_input,
+                ),
+                # Manual numeric ID typed by the user
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
                     handle_group_input,
                 ),
                 CommandHandler("cancel", cmd_cancel),
