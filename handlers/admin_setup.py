@@ -411,45 +411,12 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("🔍 Checking your X login status...")
 
     try:
+        # First check if browser is running via the lightweight status endpoint
         status = project_b.get_browser_status(chrome_id)
-        logger.info("[verify_login] raw status from Project B: %s", status)
-        logged_in = bool(status.get("loggedIn", False))
+        logger.info("[verify_login] status from Project B: %s", status)
         running = bool(status.get("running", False))
 
-        if logged_in:
-            db.set_x_logged_in(user.id, True)
-            await query.edit_message_text(
-                "✅ <b>X Login Verified!</b>\n\n"
-                "🎉 Setup is complete. Your bot is ready!\n\n"
-                "Now add me to your group and use:\n"
-                "• <code>/set</code> — Post open GIF + quote\n"
-                "• <code>/open</code> — Start collecting X links\n"
-                "• <code>/slow</code> or <code>/fast</code> — Set retweet speed\n"
-                "• <code>/stats</code> — Session statistics",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 My Status", callback_data="setup:status")],
-                ]),
-            )
-        elif running:
-            # Browser is running but not yet flagged as logged in.
-            # Do NOT restart — that would kill the existing session.
-            # Just ask the user to wait a moment and check again.
-            db.set_x_logged_in(user.id, False)
-            await query.edit_message_text(
-                "❌ <b>Not logged in yet.</b>\n\n"
-                "The browser is running but X login hasn't been detected.\n"
-                "• Make sure you completed the login inside the browser window\n"
-                "• Wait a few seconds, then tap <b>Check Again</b>\n\n"
-                f"<i>Debug: loggedIn={status.get('loggedIn')!r}, "
-                f"running={status.get('running')!r}</i>",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
-                    [InlineKeyboardButton("↩️ Back to Setup", callback_data="setup:back")],
-                ]),
-            )
-        else:
+        if not running:
             # Browser not running — try to start it
             await query.edit_message_text(
                 "⚠️ Browser is not running. Attempting to start it...",
@@ -464,7 +431,7 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if login_url:
                     buttons.insert(0, [InlineKeyboardButton("🔗 Open Login Link", url=login_url)])
                 await query.edit_message_text(
-                    f"🌐 Browser started! Please log into X, then tap Check Again.",
+                    "🌐 Browser started! Please log into X, then tap Check Again.",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )
@@ -474,6 +441,61 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML",
                     reply_markup=_setup_keyboard(),
                 )
+            return IDLE
+
+        # Browser is running — use check-login endpoint to detect actual X login
+        login_result = project_b.check_login(chrome_id)
+        logger.info("[verify_login] check-login result: %s", login_result)
+
+        if "error" in login_result:
+            # check-login endpoint failed (e.g. Project B version doesn't have it yet)
+            # Fall back to manual confirmation
+            await query.edit_message_text(
+                "🟡 <b>Browser is running.</b>\n\n"
+                "Could not auto-detect your X login status.\n\n"
+                "If you have <b>already logged into X</b> in the browser window, "
+                "tap <b>✅ Yes, I'm Logged In</b> to mark setup as complete.\n\n"
+                "If you haven't logged in yet, open the browser link first, "
+                "complete login, then come back here.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Yes, I'm Logged In", callback_data="setup:confirm_login")],
+                    [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
+                    [InlineKeyboardButton("↩️ Back to Setup", callback_data="setup:back")],
+                ]),
+            )
+        elif login_result.get("loggedIn"):
+            db.set_x_logged_in(user.id, True)
+            await query.edit_message_text(
+                "✅ <b>X Login Verified!</b>\n\n"
+                "🎉 Setup is complete. Your bot is ready!\n\n"
+                "Now add me to your group and use:\n"
+                "• <code>/set</code> — Post open GIF + quote\n"
+                "• <code>/open</code> — Start collecting X links\n"
+                "• <code>/slow</code> or <code>/fast</code> — Set retweet speed\n"
+                "• <code>/stats</code> — Session statistics",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 My Status", callback_data="setup:status")],
+                ]),
+            )
+        else:
+            # Browser running but not logged in
+            db.set_x_logged_in(user.id, False)
+            reason = login_result.get("reason", "")
+            hint = f"\n\n<i>{reason}</i>" if reason else ""
+            await query.edit_message_text(
+                f"❌ <b>Not logged in yet.</b>\n\n"
+                "The browser is running but X is not logged in.\n"
+                "• Complete the login in the browser window\n"
+                f"• Then tap <b>Check Again</b>{hint}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔁 Check Again", callback_data="setup:verify_login")],
+                    [InlineKeyboardButton("✅ Yes, I'm Logged In", callback_data="setup:confirm_login")],
+                    [InlineKeyboardButton("↩️ Back to Setup", callback_data="setup:back")],
+                ]),
+            )
 
     except Exception as e:
         logger.exception("Login verification failed")
@@ -483,6 +505,43 @@ async def cb_verify_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_setup_keyboard(),
         )
 
+    return IDLE
+
+
+# ---------------------------------------------------------------------------
+# Callback: setup:confirm_login  (manual trust confirmation)
+# ---------------------------------------------------------------------------
+
+async def cb_confirm_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin manually confirms they have logged into X in the browser.
+
+    Used when Project B's status endpoint doesn't return a loggedIn field
+    and we can't auto-detect the login state.
+    """
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+
+    if not _is_admin(user.id):
+        await query.edit_message_text("❌ Not a registered admin.")
+        return IDLE
+
+    db.set_x_logged_in(user.id, True)
+    logger.info("[confirm_login] user %s manually confirmed X login", user.id)
+
+    await query.edit_message_text(
+        "✅ <b>X Login Confirmed!</b>\n\n"
+        "🎉 Setup is complete. Your bot is ready!\n\n"
+        "Now add me to your group and use:\n"
+        "• <code>/set</code> — Post open GIF + quote\n"
+        "• <code>/open</code> — Start collecting X links\n"
+        "• <code>/slow</code> or <code>/fast</code> — Set retweet speed\n"
+        "• <code>/stats</code> — Session statistics",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 My Status", callback_data="setup:status")],
+        ]),
+    )
     return IDLE
 
 
@@ -640,6 +699,7 @@ def register(application):
                 CallbackQueryHandler(cb_setup_group, pattern="^setup:group$"),
                 CallbackQueryHandler(cb_setup_chrome, pattern="^setup:chrome$"),
                 CallbackQueryHandler(cb_verify_login, pattern="^setup:verify_login$"),
+                CallbackQueryHandler(cb_confirm_login, pattern="^setup:confirm_login$"),
                 CallbackQueryHandler(cb_setup_status, pattern="^setup:status$"),
                 CallbackQueryHandler(cb_setup_back, pattern="^setup:back$"),
             ],
@@ -671,6 +731,7 @@ def register(application):
     # standalone callbacks (outside conversation — e.g. after bot restart)
     application.add_handler(CallbackQueryHandler(cb_setup_chrome, pattern="^setup:chrome$"))
     application.add_handler(CallbackQueryHandler(cb_verify_login, pattern="^setup:verify_login$"))
+    application.add_handler(CallbackQueryHandler(cb_confirm_login, pattern="^setup:confirm_login$"))
     application.add_handler(CallbackQueryHandler(cb_setup_status, pattern="^setup:status$"))
     application.add_handler(CallbackQueryHandler(cb_setup_back, pattern="^setup:back$"))
 

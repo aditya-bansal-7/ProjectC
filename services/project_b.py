@@ -180,11 +180,35 @@ class ProjectBClient:
             logger.error(f"[ProjectB] bulk_retweet error: {e}")
             raise
 
+    def check_login(self, chrome_id: str) -> dict:
+        """
+        GET /browser/:chromeId/check-login
+
+        Async endpoint that evaluates the live Puppeteer page for X DOM
+        selectors to give a definitive loggedIn true/false.
+
+        Returns: {chromeId, running, loggedIn, reason?}
+        """
+        try:
+            return self._get(f"/browser/{chrome_id}/check-login")
+        except Exception as e:
+            logger.error(f"[ProjectB] check_login({chrome_id}) error: {e}")
+            return {"running": False, "loggedIn": False, "error": str(e)}
+
     def is_logged_in(self, chrome_id: str) -> bool:
-        """Quick check — returns True if the browser profile is logged into X."""
+        """Returns True if the browser profile is logged into X.
+
+        Uses the new /check-login endpoint (evaluates live page DOM).
+        Falls back to /status if check-login is unavailable.
+        """
+        result = self.check_login(chrome_id)
+        if "error" not in result:
+            return bool(result.get("loggedIn", False))
+        # Fallback to status
         status = self.get_browser_status(chrome_id)
         return bool(status.get("loggedIn", False))
 
 
 # Singleton
 project_b = ProjectBClient()
+

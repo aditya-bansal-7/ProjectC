@@ -146,7 +146,8 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    if not status.get("loggedIn") and not project_b.is_logged_in(chrome_id):
+    # Use check-login for definitive login status (evaluates live page DOM)
+    if not project_b.is_logged_in(chrome_id):
         await update.message.reply_text(
             "❌ X account is not logged in.\n"
             "Go to bot DM → /setup → ✅ I've Logged In to X"

@@ -74,17 +74,21 @@ def _worker_loop(bot: Bot):
                 if now - last_check >= LOGIN_CHECK_EVERY:
                     _last_login_check[admin_id] = now
                     try:
-                        status = project_b.get_browser_status(chrome_id)
-                        if not status.get("loggedIn"):
-                            logger.warning(f"[Worker] Admin {admin_id} — X session lost. Stopping.")
+                        login_result = project_b.check_login(chrome_id)
+                        is_running = login_result.get("running", False)
+                        is_logged_in = login_result.get("loggedIn", False)
+
+                        if not is_running or (not is_logged_in and "error" not in login_result):
+                            reason = "Browser stopped" if not is_running else "Invalid cookies / X session lost"
+                            logger.warning(f"[Worker] Admin {admin_id} — {reason}. Stopping.")
                             db.end_session(admin_id)
                             db.set_x_logged_in(admin_id, False)
                             _last_retweet.pop(admin_id, None)
                             _last_login_check.pop(admin_id, None)
                             _send_group_message(
                                 bot, group_id,
-                                "❌ <b>BOT STOPPED</b>\n\n"
-                                "Reason: Invalid cookies / X session lost.\n\n"
+                                f"❌ <b>BOT STOPPED</b>\n\n"
+                                f"Reason: {reason}.\n\n"
                                 "Fix the login in the bot DM → /setup, then send /open again.",
                             )
                             continue
