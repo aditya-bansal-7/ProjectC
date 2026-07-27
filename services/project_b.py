@@ -48,6 +48,18 @@ class ProjectBClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _absolute_url(self, url: str) -> str:
+        """Return *url* as a fully-qualified URL.
+
+        Project B sometimes returns a relative path (e.g. '/browser/admin-123/')
+        instead of a full URL.  Telegram InlineKeyboardButton rejects relative
+        URLs, so we prepend self.base whenever the value starts with '/'.
+        """
+        if url and url.startswith("/"):
+            # Strip any trailing slash from base to avoid double-slash
+            return self.base.rstrip("/") + url
+        return url
+
     # -------------------------------------------------------------------------
     # Browser / Chrome profile endpoints
     # -------------------------------------------------------------------------
@@ -65,12 +77,19 @@ class ProjectBClient:
         """
         POST /browser/create
         Returns: {chromeId, loginUrl, url, success, running}
+
+        The ``url`` and ``loginUrl`` fields are normalised to absolute URLs
+        before being returned so callers never receive a bare relative path.
         """
         payload = {}
         if chrome_id:
             payload["chromeId"] = chrome_id
         try:
-            return self._post("/browser/create", payload)
+            result = self._post("/browser/create", payload)
+            for key in ("url", "loginUrl"):
+                if key in result:
+                    result[key] = self._absolute_url(result[key])
+            return result
         except Exception as e:
             logger.error(f"[ProjectB] create_chrome_profile error: {e}")
             raise
@@ -79,9 +98,16 @@ class ProjectBClient:
         """
         POST /browser/:chromeId/start
         Returns: {chromeId, loginUrl, url, running}
+
+        The ``url`` and ``loginUrl`` fields are normalised to absolute URLs
+        before being returned so callers never receive a bare relative path.
         """
         try:
-            return self._post(f"/browser/{chrome_id}/start")
+            result = self._post(f"/browser/{chrome_id}/start")
+            for key in ("url", "loginUrl"):
+                if key in result:
+                    result[key] = self._absolute_url(result[key])
+            return result
         except Exception as e:
             logger.error(f"[ProjectB] start_browser({chrome_id}) error: {e}")
             raise
